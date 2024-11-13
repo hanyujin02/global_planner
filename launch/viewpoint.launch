@@ -1,0 +1,6 @@
+<launch>
+	<rosparam file="$(find global_planner)/cfg/viewpoint_planner.yaml" ns="/viewpoint_planner"  />
+    <node pkg="global_planner" type="viewpoint_generator_node" name="viewpoint_generator_node" output="screen" />
+
+	<node name="rviz" pkg="rviz" type="rviz" args="-d $(find global_planner)/rviz/viewpoint_generator.rviz"/>
+</launch>

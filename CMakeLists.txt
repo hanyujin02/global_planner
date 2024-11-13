@@ -17,6 +17,8 @@ find_package(catkin REQUIRED COMPONENTS
   map_manager
 )
 find_package(OpenCV REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(PCL 1.7 REQUIRED)
 
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
@@ -111,6 +113,7 @@ catkin_package(
   INCLUDE_DIRS include
   LIBRARIES global_planner
   CATKIN_DEPENDS roscpp rospy std_msgs
+  DEPENDS PCL
   #DEPENDS system_lib
 )
 
@@ -123,6 +126,7 @@ catkin_package(
 include_directories(
   include
   ${catkin_INCLUDE_DIRS}
+  ${PCL_INCLUDE_DIRS}
 )
 
 ## Declare a C++ library
@@ -131,7 +135,8 @@ include_directories(
 # )
 add_library(${PROJECT_NAME} src/globalPlannerLib.cpp
                             include/${PROJECT_NAME}/PRMKDTree.cpp
-                            include/${PROJECT_NAME}/dep.cpp)
+                            include/${PROJECT_NAME}/dep.cpp
+                            include/${PROJECT_NAME}/viewpointGenerator.cpp)
 
 
 ## Add cmake target dependencies of the library
@@ -149,7 +154,7 @@ add_library(${PROJECT_NAME} src/globalPlannerLib.cpp
 add_executable(rrt_interactive_node src/rrt_interactive_node.cpp)
 add_executable(rrt_star_interactive_node src/rrt_star_interactive_node.cpp)
 add_executable(test_dep_node src/test_dep_node.cpp)
-
+add_executable(viewpoint_generator_node src/viewpoint_generator_node.cpp)
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
@@ -166,14 +171,14 @@ add_executable(test_dep_node src/test_dep_node.cpp)
 # target_link_libraries(${PROJECT_NAME}_node
 #   ${catkin_LIBRARIES}
 # )
-target_link_libraries(${PROJECT_NAME} ${catkin_LIBRARIES} ${OpenCV_LIBS})
+target_link_libraries(${PROJECT_NAME} ${catkin_LIBRARIES} ${OpenCV_LIBS} ${PCL_LIBRARIES})
 # target_link_libraries(test_kdtree ${catkin_LIBRARIES})
 # target_link_libraries(test_prm_kdtree ${catkin_LIBRARIES} ${PROJECT_NAME} ${OpenCV_LIBS})
 # target_link_libraries(test_blob_detection ${catkin_LIBRARIES})
 target_link_libraries(rrt_interactive_node ${catkin_LIBRARIES})
 target_link_libraries(rrt_star_interactive_node ${catkin_LIBRARIES})
 target_link_libraries(test_dep_node ${catkin_LIBRARIES} ${PROJECT_NAME})
-
+target_link_libraries(viewpoint_generator_node ${PROJECT_NAME} ${catkin_LIBRARIES})
 
 #############
 ## Install ##
