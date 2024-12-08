@@ -55,7 +55,7 @@ namespace globalPlanner{
 		// Param
 		std::string mapDir_;
 		double offset_;
-		double step_;
+		double step_, stepZ_;
 		double groundHgt_, ceilingHgt_;
 		double resolution_;
 

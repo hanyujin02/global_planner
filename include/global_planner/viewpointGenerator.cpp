@@ -39,6 +39,15 @@ namespace globalPlanner{
 			cout << this->hint_ << ": the inspection step param is found: " << this->step_ << endl;
 		}
 
+        // viewpoint height step
+        if (not this->nh_.getParam(this->ns_ + "/inspection_Z_step", this->stepZ_)){
+			this->stepZ_ = 1.0;
+			cout << this->hint_ << ": No inspection Z step param found. Use 1.0 m" << endl;
+		}
+		else{
+			cout << this->hint_ << ": the inspection Z step param is found: " << this->stepZ_ << endl;
+		}
+
         // ground height
         if (not this->nh_.getParam(this->ns_ + "/ground_height", this->groundHgt_)){
 			this->groundHgt_ = 1.0;
@@ -190,7 +199,9 @@ namespace globalPlanner{
                 cluster.points.push_back(this->refCloud_.points[clusters[i].indices[j]]);
                 pcl::Normal normal = normals->points[clusters[i].indices[j]];
                 Eigen::Vector3d n{normal.normal_x, normal.normal_y, normal.normal_z};
-                avgNormal += n;
+                if (not std::isnan(n.norm())){
+                    avgNormal = avgNormal + n;
+                }
             }
 
             pcl::PointXYZ minPoint, maxPoint;
@@ -280,6 +291,7 @@ namespace globalPlanner{
             };
             double height = vertex[4](2)-vertex[0](2);
             
+            // for (double j=0.1;j<height;j+=this->step_){
             for(int i=0;i<4;i++){
                 Eigen::Vector3d start = vertex[vert_idx[i][0]];
                 Eigen::Vector3d end = vertex[vert_idx[i][1]];
@@ -295,11 +307,28 @@ namespace globalPlanner{
                     Eigen::Vector3d angleVec = centroid-mid;
                     double viewAngle = atan2(angleVec(1),angleVec(0));
 
-                    for(double dist=0.1;dist<direction.norm();dist+=this->step_){
-                        Eigen::Vector3d p = start + dist*direction/direction.norm();
-                        for (double j=0.1;j<height;j+=this->step_){
+                    // for(double dist=0.1;dist<direction.norm();dist+=this->step_){
+                    //     Eigen::Vector3d p = start + dist*direction/direction.norm();
+                    //     for (double j=0.1;j<height;j+=this->step_){
+                    //         Eigen::Vector3d point = p;
+                    //         point(2) += j;
+                    //         if (this->isInMap(point(0), point(1), point(2))){
+                    //             if (not this->vpHasCollision(point)){   
+                    //                 ViewPoint vp;
+                    //                 vp.pose = point;
+                    //                 vp.yaw = viewAngle;
+                    //                 vps.push_back(vp);
+                    //             }
+                    //         }
+                    //     }
+                    // }
+                    for (double j=0.1;j<height;j+=this->stepZ_){
+                        Eigen::Vector3d p = start;
+                        p(2) += j;
+                        std::vector<ViewPoint> vps;
+                        for(double dist=0.1;dist<direction.norm();dist+=this->step_){                                                    
                             Eigen::Vector3d point = p;
-                            point(2) += j;
+                            point = point + dist*direction/direction.norm();
                             if (this->isInMap(point(0), point(1), point(2))){
                                 if (not this->vpHasCollision(point)){   
                                     ViewPoint vp;
@@ -309,14 +338,13 @@ namespace globalPlanner{
                                 }
                             }
                         }
-                        
+                        if (vps.size()>0){
+                            vpSet.push_back(vps);   
+                        }
                     }
                 }
             }
-
-            vpSet.push_back(vps);
         }
-        
         this->vpSet_ = this->makePlan(vpSet);
     }
 
