@@ -350,7 +350,7 @@ namespace globalPlanner{
 
     bool vpPlanner::vpHasCollision(const Eigen::Vector3d &viewpoint){
 		Eigen::Vector3d p;
-		double r = 1.0;//radius for goal collision check
+		double r = this->offset_;//radius for goal collision check
 		for (double i=-r; i<=r;i+=0.1){
 			for(double j=-r;j<=r;j+=0.1){
 				for (double k = -r; k<=r; k+=0.1){
