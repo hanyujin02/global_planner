@@ -353,14 +353,17 @@ namespace globalPlanner{
 		double r = this->offset_;//radius for goal collision check
 		for (double i=-r; i<=r;i+=0.1){
 			for(double j=-r;j<=r;j+=0.1){
-				for (double k = -r; k<=r; k+=0.1){
+				// for (double k = -r; k<=r; k+=0.1){
 					p(0) = viewpoint(0)+i;
 					p(1) = viewpoint(1)+j;
-					p(2) = viewpoint(2)+k;
+					p(2) = viewpoint(2);
 					if (this->isInMap(p(0), p(1), p(2)) and this->isOccupied(p(0), p(1), p(2))){
 						return true;
 					}
-				}
+                    else if (not this->isInMap(p(0), p(1), p(2))){
+                        return true;
+                    }
+				// }
 			}
 		}
 		return false;
