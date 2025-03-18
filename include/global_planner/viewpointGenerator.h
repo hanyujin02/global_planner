@@ -2,6 +2,7 @@
 #define VIEWPOINT_GENERATOR_H
 
 #include <ros/ros.h>
+#include <ros/package.h>
 #include <vector>
 #include <algorithm>
 #include <visualization_msgs/MarkerArray.h>
@@ -59,11 +60,19 @@ namespace globalPlanner{
 		double groundHgt_, ceilingHgt_;
 		double resolution_;
 
+		double minClusterSize_, maxClusterSize_;
+		double curvThres_;
+		double angThres_;
+
 		Eigen::Vector3d mapMin_, mapMax_;
+		Eigen::Vector3d currPos_{0.0, 0.0, 1.0};
 		pcl::PointCloud<pcl::PointXYZ> refCloud_;
 		occMap occupancy_;
 		std::vector<ClusterInfo> segMap_;
 		std::vector<std::vector<ViewPoint>> vpSet_;
+		// std::vector<int> vpSeq_;
+		int n;
+		
 	public:
 		vpPlanner(const ros::NodeHandle& nh);
 
@@ -78,9 +87,11 @@ namespace globalPlanner{
 		bool isOccupied(double x, double y, double z);
 		void segMap();
 		ClusterInfo genClusterInfo(const Eigen::Vector3d &normal, pcl::PointCloud<pcl::PointXYZ> &cluster);
-		void generateViewPoint();
+		void makePlan();
 		bool vpHasCollision(const Eigen::Vector3d &viewpoint);
-		std::vector<std::vector<ViewPoint>> makePlan(const std::vector<std::vector<ViewPoint>>& vpSet);
+		std::vector<std::vector<ViewPoint>> solveSequence(const std::vector<std::vector<ViewPoint>>& vpSet);
+		// std::vector<int> solveSequence(const std::vector<std::vector<ViewPoint>> &vpSet);
+		std::vector<std::vector<ViewPoint>> rearrangeVP(const std::vector<int> &vpSeq, const std::vector<std::vector<ViewPoint>> &vpSet);
 
 		void visCB(const ros::TimerEvent&);
 		void publishMap();
@@ -90,8 +101,10 @@ namespace globalPlanner{
 
 		// user functions
 		std::vector<std::vector<Eigen::Vector4d>> getViewpoints();
+		void updateCurrPos(const Eigen::Vector3d &currPos);
 		void updateInaccessibleView(const std::vector<Eigen::Vector2i> &inaccessibleIdx);
 		double updateViewAngle(const std::vector<std::vector<Eigen::Vector3d>> &hitPoints, const double &yaw);
+		double getReward(const Eigen::Vector3d &hitPoint);
 	};
 	
 }

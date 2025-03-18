@@ -9,7 +9,7 @@ namespace globalPlanner{
         this->registerCallback();
         this->initMap();
         this->segMap();
-        this->generateViewPoint();
+        // this->generateViewPoint();
     }
 
     void vpPlanner::initParam(){
@@ -74,6 +74,39 @@ namespace globalPlanner{
 		else{
 			cout << this->hint_ << ": the map resolution param is found: " << this->resolution_ << endl;
 		}
+
+        // segmentation param
+        if (not this->nh_.getParam(this->ns_ + "/min_cluster_size", this->minClusterSize_)){
+			this->minClusterSize_ = 50;
+			cout << this->hint_ << ": No minimum cluster size param found. Use 50." << endl;
+		}
+		else{
+			cout << this->hint_ << ": the minimum cluster size resolution param is found: " << this->minClusterSize_ << endl;
+		}
+
+        if (not this->nh_.getParam(this->ns_ + "/max_cluster_size", this->maxClusterSize_)){
+			this->maxClusterSize_ = 5000;
+			cout << this->hint_ << ": No minimum cluster size param found. Use 5000." << endl;
+		}
+		else{
+			cout << this->hint_ << ": the minimum cluster size resolution param is found: " << this->maxClusterSize_ << endl;
+		}
+
+        if (not this->nh_.getParam(this->ns_ + "/curvature_threshold", this->curvThres_)){
+            this->curvThres_ = 1.0;
+            cout<< this->hint_ << ": No curvature threshold param found. Use 1.0. "<<endl;
+        }
+        else{
+            cout<< this->hint_ <<": the curvature threshold param is found: " << this->curvThres_ << endl;
+        }
+
+        if (not this->nh_.getParam(this->ns_ + "/angle_threshold", this->angThres_)){
+            this->angThres_ = 1.0;
+            cout<< this->hint_ << ": No angle threshold param found. Use 1.0. "<<endl;
+        }
+        else{
+            cout<< this->hint_ <<": the angle threshold param is found: " << this->angThres_ << endl;
+        }
     }
 
     void vpPlanner::registerPub(){
@@ -177,16 +210,16 @@ namespace globalPlanner{
 
         // 2. Perform region growing segmentation
         pcl::RegionGrowing<pcl::PointXYZ, pcl::Normal> reg;
-        reg.setMinClusterSize(500);
-        // reg.setMaxClusterSize(10000);
+        reg.setMinClusterSize(this->minClusterSize_);
+        reg.setMaxClusterSize(this->maxClusterSize_);
         pcl::search::KdTree<pcl::PointXYZ>::Ptr tree2(new pcl::search::KdTree<pcl::PointXYZ>);
         reg.setSearchMethod(tree2);
         reg.setNumberOfNeighbours(100);
         reg.setInputCloud(this->refCloud_.makeShared());
         reg.setInputNormals(normals);
         // TODO: Smoothness Threshold in Param
-        reg.setSmoothnessThreshold(2.0 / 180.0 * M_PI);  // 3 degrees
-        reg.setCurvatureThreshold(1.0);
+        reg.setSmoothnessThreshold(this->angThres_ / 180.0 * M_PI);  // 3 degrees
+        reg.setCurvatureThreshold(this->curvThres_);
 
         std::vector<pcl::PointIndices> clusters;
         reg.extract(clusters);
@@ -274,7 +307,7 @@ namespace globalPlanner{
 
     }
 
-    void vpPlanner::generateViewPoint(){
+    void vpPlanner::makePlan(){
         // TODO: ignore viewpoints outside selected polygons
         std::vector<std::vector<ViewPoint>> vpSet;
         for (const ClusterInfo &cluster: this->segMap_){
@@ -345,12 +378,12 @@ namespace globalPlanner{
                 }
             }
         }
-        this->vpSet_ = this->makePlan(vpSet);
+        this->vpSet_ = this->solveSequence(vpSet);
     }
 
     bool vpPlanner::vpHasCollision(const Eigen::Vector3d &viewpoint){
 		Eigen::Vector3d p;
-		double r = this->offset_;//radius for goal collision check
+		double r = std::max(0.0,this->offset_-0.5);//radius for goal collision check
 		for (double i=-r; i<=r;i+=0.1){
 			for(double j=-r;j<=r;j+=0.1){
 				// for (double k = -r; k<=r; k+=0.1){
@@ -369,49 +402,200 @@ namespace globalPlanner{
 		return false;
 	}
 
-    std::vector<std::vector<ViewPoint>> vpPlanner::makePlan(const std::vector<std::vector<ViewPoint>> &vpSet){
-        // TODO: set start point
-        Eigen::Vector3d start{0.0, 0.0, 0.0};
-        std::vector<std::vector<ViewPoint>> plannedSeg;
-        plannedSeg.resize(vpSet.size());
-        std::vector<std::pair<int, int>> vpIdx;
-        for (int i=0;i<int(vpSet.size());i++){
-            std::pair<int, int> idx1, idx2;
-            idx1.first = i; 
-            idx1.second = 0;
-            idx2.first = i;
-            idx2.second = int(vpSet[i].size())-1;
-            vpIdx.push_back(idx1);
-            vpIdx.push_back(idx2);
-        }
-        for (int i=0;i<int(vpSet.size());i++){
-            double minDist = INFINITY;
-            int idx = -1;
-            for (int j=0;j<int(vpIdx.size());j++){
-                ViewPoint vp = vpSet[vpIdx[j].first][vpIdx[j].second];
-                double dist = (vp.pose-start).norm();
-                if (dist < minDist){
-                    minDist = dist;
-                    idx = j;
-                }
-            }
-            std::vector<ViewPoint> vec = vpSet[vpIdx[idx].first];
-            if (vpIdx[idx].second==0){
-                plannedSeg[i] = vec;
-                start = vec.back().pose;
-                vpIdx.erase(vpIdx.begin()+idx);
-                vpIdx.erase(vpIdx.begin()+idx);
+    // std::vector<std::vector<ViewPoint>> vpPlanner::makePlan(const std::vector<std::vector<ViewPoint>> &vpSet){
+    //     // TODO: set start point
+    //     Eigen::Vector3d start{0.0, 0.0, 0.0};
+    //     std::vector<std::vector<ViewPoint>> plannedSeg;
+    //     plannedSeg.resize(vpSet.size());
+    //     std::vector<std::pair<int, int>> vpIdx;
+    //     for (int i=0;i<int(vpSet.size());i++){
+    //         std::pair<int, int> idx1, idx2;
+    //         idx1.first = i; 
+    //         idx1.second = 0;
+    //         idx2.first = i;
+    //         idx2.second = int(vpSet[i].size())-1;
+    //         vpIdx.push_back(idx1);
+    //         vpIdx.push_back(idx2);
+    //     }
+    //     for (int i=0;i<int(vpSet.size());i++){
+    //         double minDist = INFINITY;
+    //         int idx = -1;
+    //         for (int j=0;j<int(vpIdx.size());j++){
+    //             ViewPoint vp = vpSet[vpIdx[j].first][vpIdx[j].second];
+    //             double dist = (vp.pose-start).norm();
+    //             if (dist < minDist){
+    //                 minDist = dist;
+    //                 idx = j;
+    //             }
+    //         }
+    //         std::vector<ViewPoint> vec = vpSet[vpIdx[idx].first];
+    //         if (vpIdx[idx].second==0){
+    //             plannedSeg[i] = vec;
+    //             start = vec.back().pose;
+    //             vpIdx.erase(vpIdx.begin()+idx);
+    //             vpIdx.erase(vpIdx.begin()+idx);
 
+    //         }
+    //         else{
+    //             std::reverse(vec.begin(), vec.end());
+    //             plannedSeg[i] = vec;
+    //             start = vec.back().pose;
+    //             vpIdx.erase(vpIdx.begin()+idx);
+    //             vpIdx.erase(vpIdx.begin()+idx-1);
+    //         } 
+    //     }
+    //     return plannedSeg;
+    // }
+
+    //Lin-Kernighan heuristic symetric TSP
+    std::vector<std::vector<ViewPoint>> vpPlanner::solveSequence(const std::vector<std::vector<ViewPoint>> &vpSet){
+        // std::vector<ViewPoint> vpSeqTemp;
+
+        ros::Time start = ros::Time::now();
+        cout<<"start"<<endl;
+        std::vector<int> nodeIdx;
+        std::string package_path = ros::package::getPath("global_planner");
+        cout<<package_path<<endl;
+        std::string filepath = package_path + "/lkh/nodes.tsp";
+        ofstream outFile(filepath);
+        if (!outFile.is_open()) {
+            cerr << "Error opening file for writing: " << filepath << endl;
+            // return vpSeqTemp;
+        }
+
+        int size = 1; // start with current position
+        for (int i=0;i<int(vpSet.size());i++){
+            for (int j=0;j<int(vpSet[i].size());j++){
+                size++;
+            }
+        }
+
+        // Write the header
+        outFile << "NAME : GeneratedFile\n";
+        outFile << "COMMENT : Example file generated by program\n";
+        outFile << "TYPE : TSP\n";
+        outFile << "DIMENSION : " << size << "\n";
+        outFile << "EDGE_WEIGHT_TYPE : EUC_3D\n";
+        outFile << "NODE_COORD_SECTION\n";
+
+        int idx = 1;// start with current position
+        // std::vector<ViewPoint> vpSeqTemp;
+        outFile<< idx << " " << this->currPos_(0) << " " << this->currPos_(1) << " " << this->currPos_(2) << endl;
+        // outFile<< idx << " 0.0 0.0 1.0" << endl;
+        idx++;
+        for (int i=0;i<int(vpSet.size());i++){
+            for (int j=0;j<int(vpSet[i].size());j++){
+                outFile << idx << " " <<vpSet[i][j].pose(0) << " " << vpSet[i][j].pose(1) << " " << vpSet[i][j].pose(2) << endl;
+                // vpSeqTemp.push_back(vpSet[i][j]);
+                idx++;
+            }
+        }
+
+        outFile.close();
+        cout << "Data saved to " << filepath << endl;
+
+        // Command with arguments
+        std::string command = package_path + "/lkh/LKH" + " " + package_path + "/lkh/nodes.par";
+
+        int ret_code = system(command.c_str());
+        if (ret_code != 0) {
+            ROS_ERROR("Executable failed with return code %d", ret_code);
+        } else {
+            ROS_INFO("Executable ran successfully.");
+        }
+
+        std::string solvedfilepath = package_path + "/lkh/nodes_solved.tsp";
+
+        // std::vector<int> nodeIdx;
+        ifstream inFile(solvedfilepath);
+        if (!inFile.is_open()) {
+            cerr << "Error opening file: " << solvedfilepath << endl;
+            // return vpSeqTemp;
+            // return;
+        }
+
+        std::string line;
+        bool readingNodes = false;
+        while (getline(inFile, line)) {
+            if (line == "EOF") break;
+            if (line == "TOUR_SECTION") {
+                readingNodes = true;
+                continue;
+                
+            }
+            if (readingNodes){
+                int id;
+                std::stringstream ss(line);
+                ss >> id;
+                nodeIdx.push_back(id-2);
+            }
+            
+
+            
+        }
+        cout<<"nodeIdx Size: "<<nodeIdx.size()<<endl;
+        inFile.close();
+        for (int i=0;i<int(nodeIdx.size());i++){
+            cout<<"idx: "<<nodeIdx[i]<<endl;
+        }
+        nodeIdx.erase(nodeIdx.begin());
+        nodeIdx.pop_back();
+        ros::Time end = ros::Time::now();
+        cout<<"time taken: "<<(end-start).toSec()<<endl;
+
+        // // rearrange seqence
+        // std::vector<ViewPoint> vpSeq;
+        // for (int i=0;i<int(nodeIdx.size());i++){
+        //     vpSeq.push_back(vpSeqTemp[nodeIdx[i]-1]);
+        // }
+
+        std::vector<std::vector<ViewPoint>> vpSetArranged = this->rearrangeVP(nodeIdx, vpSet);
+        return vpSetArranged;
+
+    }
+
+    std::vector<std::vector<ViewPoint>> vpPlanner::rearrangeVP(const std::vector<int> &vpSeq, const std::vector<std::vector<ViewPoint>> &vpSet){
+        // pose processing:
+        // this->vpSeq_;
+        int prevSeg = -1;
+        std::vector<ViewPoint> seg;
+        std::vector<std::vector<ViewPoint>> vpSetArranged;
+        for(int i=0;i<int(vpSeq.size());i++){
+            int targetIdx = vpSeq[i];
+            cout<<"vp number "<<targetIdx<<endl;
+            // find segment
+            int idx = -1;
+            int currSeg = -1;
+            for (int j=0;j<int(vpSet.size());j++){
+                if (idx<targetIdx and idx+int(vpSet[j].size())>=targetIdx){
+                    currSeg = j;
+                    // cout<<"belongs to segment "<<currSeg<<endl;
+                    break;
+                }
+                idx += int(vpSet[j].size());
+            }
+
+            if (currSeg != prevSeg){
+                if (int(seg.size()>0)){
+                    vpSetArranged.push_back(seg);
+                }
+                seg.clear();
+                seg.push_back(vpSet[currSeg][targetIdx-idx-1]);
+                // cout<<"new segment: "<<currSeg<<", "<<targetIdx-idx<<endl;
             }
             else{
-                std::reverse(vec.begin(), vec.end());
-                plannedSeg[i] = vec;
-                start = vec.back().pose;
-                vpIdx.erase(vpIdx.begin()+idx);
-                vpIdx.erase(vpIdx.begin()+idx-1);
-            } 
+                seg.push_back(vpSet[currSeg][targetIdx-idx-1]);
+                // cout<<"continue segment: "<<currSeg<<", "<<targetIdx-idx<<endl;
+                if (i==int(vpSeq.size()-1)){
+                    vpSetArranged.push_back(seg);
+                }
+            }
+            prevSeg = currSeg;
         }
-        return plannedSeg;
+
+        // TODO: Reduce the 
+        cout<<"seg size: "<<vpSetArranged.size()<<endl;
+        return vpSetArranged;
     }
 
     void vpPlanner::visCB(const ros::TimerEvent&){
@@ -455,7 +639,7 @@ namespace globalPlanner{
 				p.y = this->refCloud_.points[i].y;
 				p.z = this->refCloud_.points[i].z;
                 int idx = this->getIdx(p.x, p.y, p.z);
-                if (this->occupancy_.reward[idx] == 1.0){
+                if (this->occupancy_.reward[idx] > 0.5){
                     points.points.push_back(p);
                 }
 		}
@@ -552,6 +736,7 @@ namespace globalPlanner{
     void vpPlanner::publishViewPoints() {
         if (!this->vpSet_.empty()) {
             visualization_msgs::Marker point;
+            visualization_msgs::Marker text;
             visualization_msgs::MarkerArray points;
 
             // Marker common properties
@@ -568,17 +753,39 @@ namespace globalPlanner{
             point.color.a = 1.0;
             point.lifetime = ros::Duration(0.2);
 
+            text.header.frame_id = "map";
+            text.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
+            text.action = visualization_msgs::Marker::ADD;
+            text.ns = "sequence";
+            text.scale.x = 0.6;
+            text.scale.y = 0.6;
+            text.scale.z = 0.6;
+            text.color.r = 1.0;
+            text.color.g = 0.0;
+            text.color.b = 0.0;
+            text.color.a = 1.0;
+            text.lifetime = ros::Duration(0.2);
+
             int id = 0; // Unique marker ID
+            int vpIdx = 0;
             for (size_t i = 0; i < this->vpSet_.size(); ++i) {
                 for (size_t j = 0; j < this->vpSet_[i].size(); ++j) {
                     // Re-initialize and update position for each point
                     point.pose.position.x = this->vpSet_[i][j].pose(0);
                     point.pose.position.y = this->vpSet_[i][j].pose(1);
                     point.pose.position.z = this->vpSet_[i][j].pose(2);
+                    
+                    text.pose.position.x = this->vpSet_[i][j].pose(0);
+                    text.pose.position.y = this->vpSet_[i][j].pose(1);
+                    text.pose.position.z = this->vpSet_[i][j].pose(2)+0.5;
+                    
+                    text.text = std::to_string(vpIdx);
                     point.id = id++; // Assign unique ID for each marker
-
+                    text.id = id++;
                     // Add the marker to the array
                     points.markers.push_back(point);
+                    points.markers.push_back(text);
+                    vpIdx++;
                 }
             }
 
@@ -603,14 +810,18 @@ namespace globalPlanner{
         return viewpoints;
     }
 
+    void vpPlanner::updateCurrPos(const Eigen::Vector3d &currPos){
+        this->currPos_ = currPos;
+    }
+
     void vpPlanner::updateInaccessibleView(const std::vector<Eigen::Vector2i> &inaccessibleIdx){
         for (int i=0; i<int(inaccessibleIdx.size());i++){
             // get blocked viewpoint
             ViewPoint vp = this->vpSet_[inaccessibleIdx[i][0]][inaccessibleIdx[i][1]];
             // get blocked occmap
             double minAngle, maxAngle;
-            minAngle = vp.yaw-M_PI/4;
-            maxAngle = vp.yaw+M_PI/4;
+            minAngle = vp.yaw-M_PI/8;
+            maxAngle = vp.yaw+M_PI/8;
             for (double j=minAngle;j<maxAngle;j+=0.1){
                 // TODO : n param (height angle)
                 for (double n=-M_PI/6;n<M_PI/6;n+=0.1){
@@ -620,7 +831,7 @@ namespace globalPlanner{
                         if (this->isInMap(projPoint(0), projPoint(1),projPoint(2)) and this->isOccupied(projPoint(0), projPoint(1),projPoint(2))){
                             int pointIdx = this->getIdx(projPoint(0), projPoint(1), projPoint(2));
                             // TODO: check reward value
-                            this->occupancy_.reward[pointIdx] = 1.0;
+                            this->occupancy_.reward[pointIdx] = 2.0;
                         }  
                     }
                 }   
@@ -637,17 +848,19 @@ namespace globalPlanner{
             double r = 0;
             for (int j=0;j<int(hitPoints[i].size());j++){
                 Eigen::Vector3d p = hitPoints[i][j];
-                if (this->isInMap(p(0), p(1), p(2)) and this->isOccupied(p(0), p(1), p(2))){
-                    int idx = this->getIdx(p(0), p(1), p(2));
-                    r += this->occupancy_.reward[idx];
-                }
+                // if (this->isInMap(p(0), p(1), p(2)) and this->isOccupied(p(0), p(1), p(2))){
+                //     int idx = this->getIdx(p(0), p(1), p(2));
+                //     r += this->occupancy_.reward[idx];
+                // }
+                r += this->getReward(p);
             }
             reward.push_back(r);
         }
         std::vector<std::pair<double, double>> angleReward;
         for (int i=0;i<int(reward.size());i++){
             double ang = i*hres;
-            if (std::abs(ang-yaw/M_PI*180)<30){
+            // TODO: Angle threshold
+            if (std::abs(ang-yaw/M_PI*180)<10){
                 double r = 0;
                 double minAngle, maxAngle;
                 minAngle = i*hres - 87/2;
@@ -686,5 +899,28 @@ namespace globalPlanner{
         }
 
         return yaw;
+    }
+
+    double vpPlanner::getReward(const Eigen::Vector3d &hitPoint){
+        Eigen::Vector3d p;
+		double r = 0.2;//radius for goal collision check
+        double reward = 0;
+		for (double i=-r; i<=r;i+=0.1){
+			for(double j=-r;j<=r;j+=0.1){
+				for (double k = -r; k<=r; k+=0.1){
+					p(0) = hitPoint(0)+i;
+					p(1) = hitPoint(1)+j;
+					p(2) = hitPoint(2)+k;
+					if (this->isInMap(p(0), p(1), p(2))){
+                        int idx = this->getIdx(p(0), p(1), p(2));
+						reward += this->occupancy_.reward[idx];
+					}
+                    // else if (not this->isInMap(p(0), p(1), p(2))){
+                    //     return true;
+                    // }
+				}
+			}
+		}
+        return reward;
     }
 }

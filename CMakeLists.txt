@@ -125,6 +125,7 @@ catkin_package(
 ## Your package locations should be listed before other locations
 include_directories(
   include
+  include/${PROJECT_NAME}/tsp
   ${catkin_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
 )
