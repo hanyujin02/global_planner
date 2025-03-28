@@ -32,30 +32,27 @@ void visualizeTraj(){
 		ros::Rate r(5);
 
 		while(ros::ok() and id<int(vps.size())){
+			// std::cout << "Press Enter to continue..." << std::endl;
+			// std::cin.get();
+
 		// for (size_t i = 0; i < vps.size(); ++i) {
 			// for (size_t j = 0; j < vps.size(); ++j) {
 				geometry_msgs::Point p1, p2;
-				// std::vector<Eigen::Vector4d> vpset = vps[id];
-				// Eigen::Vector4d vp1, vp2;
-				// vp1 = vpset->begin();
-				// vp2 = vpset->end();
 				// Re-initialize and update position for each line
 				p1.x = vps[id].front()(0);
 				p1.y = vps[id].front()(1);
 				p1.z = vps[id].front()(2);
+				// cout<<"start: "<<p1.x<<", "<<p1.y<<", "<<p1.z<<endl;
 				
 				p2.x = vps[id].back()(0);
 				p2.y = vps[id].back()(1);
 				p2.z = vps[id].back()(2);
+				// cout<<"end: "<<p2.x<<", "<<p2.y<<", "<<p2.z<<endl;
 				
 				line.points.push_back(p1);
 				line.points.push_back(p2);
 				// cout<<vps[id].front()<<endl;
 				id++;
-				// // Add the marker to the array
-				// lines.markers.push_back(line);
-				// lines.markers.push_back(text);
-				// vpIdx++;
 				// // Publish the MarkerArray
 				trajPub.publish(line);
 				r.sleep();

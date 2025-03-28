@@ -33,6 +33,11 @@ namespace globalPlanner{
 		double yaw;
 	};
 
+	// struct VPSetInfo {
+	// 	int vpNum;
+
+	// }
+
 	struct occMap {
 		int width, height, depth;
 		std::vector<bool> occ;
@@ -64,11 +69,15 @@ namespace globalPlanner{
 		double curvThres_;
 		double angThres_;
 
+		int mergeThres_;
+
 		Eigen::Vector3d mapMin_, mapMax_;
 		Eigen::Vector3d currPos_{0.0, 0.0, 1.0};
 		pcl::PointCloud<pcl::PointXYZ> refCloud_;
 		occMap occupancy_;
 		std::vector<ClusterInfo> segMap_;
+		std::vector<std::vector<ViewPoint>> vpCluster_; // unarranged viewpoints
+		std::vector<std::vector<ViewPoint>> vpSetRaw_;
 		std::vector<std::vector<ViewPoint>> vpSet_;
 		// std::vector<int> vpSeq_;
 		int n;
@@ -89,15 +98,19 @@ namespace globalPlanner{
 		ClusterInfo genClusterInfo(const Eigen::Vector3d &normal, pcl::PointCloud<pcl::PointXYZ> &cluster);
 		void makePlan();
 		bool vpHasCollision(const Eigen::Vector3d &viewpoint);
-		std::vector<std::vector<ViewPoint>> solveSequence(const std::vector<std::vector<ViewPoint>>& vpSet);
+		std::vector<std::vector<ViewPoint>> solveSequence();
 		// std::vector<int> solveSequence(const std::vector<std::vector<ViewPoint>> &vpSet);
-		std::vector<std::vector<ViewPoint>> rearrangeVP(const std::vector<int> &vpSeq, const std::vector<std::vector<ViewPoint>> &vpSet);
-
+		std::vector<std::vector<ViewPoint>> rearrangeVP(const std::vector<int> &vpSeq);
+		std::pair<bool, std::pair<int, int>> merge(const std::array<int, 3> &original, const std::array<int, 3> &target);
+		
+		// helper function:
+		std::pair<int, int> getSegIdx(const int &targetIdx);
+		double getDistance(const int &Seg1Idx, const int & p1Idx, const int &Seg2Idx, const int & p2Idx);
 		void visCB(const ros::TimerEvent&);
 		void publishMap();
 		void publishSeg();
 		void publishBlockedPoint();
-		void publishViewPoints();
+		void publishViewPoints(const std::vector<std::vector<ViewPoint>> &vpSet);
 
 		// user functions
 		std::vector<std::vector<Eigen::Vector4d>> getViewpoints();

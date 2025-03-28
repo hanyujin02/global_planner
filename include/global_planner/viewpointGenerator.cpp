@@ -107,6 +107,14 @@ namespace globalPlanner{
         else{
             cout<< this->hint_ <<": the angle threshold param is found: " << this->angThres_ << endl;
         }
+
+        if (not this->nh_.getParam(this->ns_ + "/merge_threshold", this->mergeThres_)){
+            this->mergeThres_ = 1;
+            cout<< this->hint_ << ": No merge threshold param found. Use 1. "<<endl;
+        }
+        else{
+            cout<< this->hint_ <<": the merge threshold param is found: " << this->mergeThres_ << endl;
+        }
     }
 
     void vpPlanner::registerPub(){
@@ -270,7 +278,7 @@ namespace globalPlanner{
         pcl::getMinMax3D(cluster, minPoint, maxPoint);
 
         double xinflate, yinflate, zinflate;
-        xinflate = this->offset_;
+        xinflate = 0.5;
         yinflate = this->offset_;
         zinflate = 0.0;
         // Compute the 8 vertices
@@ -324,7 +332,6 @@ namespace globalPlanner{
             };
             double height = vertex[4](2)-vertex[0](2);
             
-            // for (double j=0.1;j<height;j+=this->step_){
             for(int i=0;i<4;i++){
                 Eigen::Vector3d start = vertex[vert_idx[i][0]];
                 Eigen::Vector3d end = vertex[vert_idx[i][1]];
@@ -340,21 +347,6 @@ namespace globalPlanner{
                     Eigen::Vector3d angleVec = centroid-mid;
                     double viewAngle = atan2(angleVec(1),angleVec(0));
 
-                    // for(double dist=0.1;dist<direction.norm();dist+=this->step_){
-                    //     Eigen::Vector3d p = start + dist*direction/direction.norm();
-                    //     for (double j=0.1;j<height;j+=this->step_){
-                    //         Eigen::Vector3d point = p;
-                    //         point(2) += j;
-                    //         if (this->isInMap(point(0), point(1), point(2))){
-                    //             if (not this->vpHasCollision(point)){   
-                    //                 ViewPoint vp;
-                    //                 vp.pose = point;
-                    //                 vp.yaw = viewAngle;
-                    //                 vps.push_back(vp);
-                    //             }
-                    //         }
-                    //     }
-                    // }
                     for (double j=0.1;j<height;j+=this->stepZ_){
                         Eigen::Vector3d p = start;
                         p(2) += j;
@@ -378,7 +370,8 @@ namespace globalPlanner{
                 }
             }
         }
-        this->vpSet_ = this->solveSequence(vpSet);
+        this->vpCluster_ = vpSet;
+        this->vpSet_ = this->solveSequence();
     }
 
     bool vpPlanner::vpHasCollision(const Eigen::Vector3d &viewpoint){
@@ -402,53 +395,8 @@ namespace globalPlanner{
 		return false;
 	}
 
-    // std::vector<std::vector<ViewPoint>> vpPlanner::makePlan(const std::vector<std::vector<ViewPoint>> &vpSet){
-    //     // TODO: set start point
-    //     Eigen::Vector3d start{0.0, 0.0, 0.0};
-    //     std::vector<std::vector<ViewPoint>> plannedSeg;
-    //     plannedSeg.resize(vpSet.size());
-    //     std::vector<std::pair<int, int>> vpIdx;
-    //     for (int i=0;i<int(vpSet.size());i++){
-    //         std::pair<int, int> idx1, idx2;
-    //         idx1.first = i; 
-    //         idx1.second = 0;
-    //         idx2.first = i;
-    //         idx2.second = int(vpSet[i].size())-1;
-    //         vpIdx.push_back(idx1);
-    //         vpIdx.push_back(idx2);
-    //     }
-    //     for (int i=0;i<int(vpSet.size());i++){
-    //         double minDist = INFINITY;
-    //         int idx = -1;
-    //         for (int j=0;j<int(vpIdx.size());j++){
-    //             ViewPoint vp = vpSet[vpIdx[j].first][vpIdx[j].second];
-    //             double dist = (vp.pose-start).norm();
-    //             if (dist < minDist){
-    //                 minDist = dist;
-    //                 idx = j;
-    //             }
-    //         }
-    //         std::vector<ViewPoint> vec = vpSet[vpIdx[idx].first];
-    //         if (vpIdx[idx].second==0){
-    //             plannedSeg[i] = vec;
-    //             start = vec.back().pose;
-    //             vpIdx.erase(vpIdx.begin()+idx);
-    //             vpIdx.erase(vpIdx.begin()+idx);
-
-    //         }
-    //         else{
-    //             std::reverse(vec.begin(), vec.end());
-    //             plannedSeg[i] = vec;
-    //             start = vec.back().pose;
-    //             vpIdx.erase(vpIdx.begin()+idx);
-    //             vpIdx.erase(vpIdx.begin()+idx-1);
-    //         } 
-    //     }
-    //     return plannedSeg;
-    // }
-
     //Lin-Kernighan heuristic symetric TSP
-    std::vector<std::vector<ViewPoint>> vpPlanner::solveSequence(const std::vector<std::vector<ViewPoint>> &vpSet){
+    std::vector<std::vector<ViewPoint>> vpPlanner::solveSequence(){
         // std::vector<ViewPoint> vpSeqTemp;
 
         ros::Time start = ros::Time::now();
@@ -464,8 +412,8 @@ namespace globalPlanner{
         }
 
         int size = 1; // start with current position
-        for (int i=0;i<int(vpSet.size());i++){
-            for (int j=0;j<int(vpSet[i].size());j++){
+        for (int i=0;i<int(this->vpCluster_.size());i++){
+            for (int j=0;j<int(this->vpCluster_[i].size());j++){
                 size++;
             }
         }
@@ -479,14 +427,11 @@ namespace globalPlanner{
         outFile << "NODE_COORD_SECTION\n";
 
         int idx = 1;// start with current position
-        // std::vector<ViewPoint> vpSeqTemp;
         outFile<< idx << " " << this->currPos_(0) << " " << this->currPos_(1) << " " << this->currPos_(2) << endl;
-        // outFile<< idx << " 0.0 0.0 1.0" << endl;
         idx++;
-        for (int i=0;i<int(vpSet.size());i++){
-            for (int j=0;j<int(vpSet[i].size());j++){
-                outFile << idx << " " <<vpSet[i][j].pose(0) << " " << vpSet[i][j].pose(1) << " " << vpSet[i][j].pose(2) << endl;
-                // vpSeqTemp.push_back(vpSet[i][j]);
+        for (int i=0;i<int(this->vpCluster_.size());i++){
+            for (int j=0;j<int(this->vpCluster_[i].size());j++){
+                outFile << idx << " " <<this->vpCluster_[i][j].pose(0) << " " << this->vpCluster_[i][j].pose(1) << " " << this->vpCluster_[i][j].pose(2) << endl;
                 idx++;
             }
         }
@@ -506,7 +451,6 @@ namespace globalPlanner{
 
         std::string solvedfilepath = package_path + "/lkh/nodes_solved.tsp";
 
-        // std::vector<int> nodeIdx;
         ifstream inFile(solvedfilepath);
         if (!inFile.is_open()) {
             cerr << "Error opening file: " << solvedfilepath << endl;
@@ -533,75 +477,223 @@ namespace globalPlanner{
 
             
         }
-        cout<<"nodeIdx Size: "<<nodeIdx.size()<<endl;
         inFile.close();
         for (int i=0;i<int(nodeIdx.size());i++){
-            cout<<"idx: "<<nodeIdx[i]<<endl;
         }
         nodeIdx.erase(nodeIdx.begin());
         nodeIdx.pop_back();
         ros::Time end = ros::Time::now();
-        cout<<"time taken: "<<(end-start).toSec()<<endl;
 
-        // // rearrange seqence
-        // std::vector<ViewPoint> vpSeq;
-        // for (int i=0;i<int(nodeIdx.size());i++){
-        //     vpSeq.push_back(vpSeqTemp[nodeIdx[i]-1]);
-        // }
-
-        std::vector<std::vector<ViewPoint>> vpSetArranged = this->rearrangeVP(nodeIdx, vpSet);
-        return vpSetArranged;
+        std::vector<std::vector<ViewPoint>> vpSet = this->rearrangeVP(nodeIdx);
+        return vpSet;
 
     }
 
-    std::vector<std::vector<ViewPoint>> vpPlanner::rearrangeVP(const std::vector<int> &vpSeq, const std::vector<std::vector<ViewPoint>> &vpSet){
-        // pose processing:
-        // this->vpSeq_;
+    std::vector<std::vector<ViewPoint>> vpPlanner::rearrangeVP(const std::vector<int> &vpSeq){
         int prevSeg = -1;
         std::vector<ViewPoint> seg;
-        std::vector<std::vector<ViewPoint>> vpSetArranged;
+        std::vector<std::vector<ViewPoint>> vpSet;
+        std::vector<std::array<int, 3>> vpSetInfo;
+        int startIdx = -1;
+        int endIdx = -1;
+
         for(int i=0;i<int(vpSeq.size());i++){
             int targetIdx = vpSeq[i];
-            cout<<"vp number "<<targetIdx<<endl;
             // find segment
-            int idx = -1;
-            int currSeg = -1;
-            for (int j=0;j<int(vpSet.size());j++){
-                if (idx<targetIdx and idx+int(vpSet[j].size())>=targetIdx){
-                    currSeg = j;
-                    // cout<<"belongs to segment "<<currSeg<<endl;
-                    break;
-                }
-                idx += int(vpSet[j].size());
-            }
+            std::pair<int, int> segIdx = this->getSegIdx(targetIdx);
+            int currSeg = segIdx.first;
+            int idx = segIdx.second;
+            std::array<int, 3> info;
 
             if (currSeg != prevSeg){
-                if (int(seg.size()>0)){
-                    vpSetArranged.push_back(seg);
+                if (int(seg.size())>0){
+                    vpSet.push_back(seg);
+                    if (endIdx <0){
+                        endIdx = startIdx;
+                    }
+                    std::array<int, 3> info = {prevSeg,startIdx,endIdx};
+                    endIdx = -1;
+                    startIdx = -1;
+                    vpSetInfo.push_back(info);
                 }
                 seg.clear();
-                seg.push_back(vpSet[currSeg][targetIdx-idx-1]);
-                // cout<<"new segment: "<<currSeg<<", "<<targetIdx-idx<<endl;
+                seg.push_back(this->vpCluster_[currSeg][idx]);
+                startIdx = idx;
             }
             else{
-                seg.push_back(vpSet[currSeg][targetIdx-idx-1]);
-                // cout<<"continue segment: "<<currSeg<<", "<<targetIdx-idx<<endl;
+                seg.push_back(this->vpCluster_[currSeg][idx]);
+                endIdx = idx;
                 if (i==int(vpSeq.size()-1)){
-                    vpSetArranged.push_back(seg);
+                    vpSet.push_back(seg);
+                    std::array<int, 3> info = {prevSeg,startIdx,endIdx};
+                    endIdx = -1;
+                    startIdx = -1;
+                    vpSetInfo.push_back(info);
                 }
             }
             prevSeg = currSeg;
         }
+        this->vpSetRaw_ = vpSet;
 
-        // TODO: Reduce the 
-        cout<<"seg size: "<<vpSetArranged.size()<<endl;
+        // Post Process
+        // filter:
+        for (int threshold=1;threshold<=this->mergeThres_;threshold++){
+            for (int i=0;i<int(vpSetInfo.size());i++){
+                std::array<int, 3> info = vpSetInfo[i];
+                if (info[0]>0){
+                    if (std::abs(info[1]-info[2])<threshold){
+                        // find closest
+                        int setIdx = -1;
+                        int minDist = INFINITY;
+                        for (int j=0;j<int(vpSetInfo.size());j++){
+                            if (vpSetInfo[j][0] == info[0] and j!=i){
+                                if (abs(j-i)<minDist){
+                                    minDist = abs(j-i);
+                                    setIdx = j;
+                                }
+                            }
+                        }
+                        // cout<<"original: "<<"seg: "<<info[0]<<", start"<<info[1]<<", end: "<<info[2]<<endl;
+                        if (setIdx >= 0){
+                            // cout<<"target: "<<"seg: "<<vpSetInfo[setIdx][0]<<", start"<<vpSetInfo[setIdx][1]<<", end: "<<vpSetInfo[setIdx][2]<<endl;
+                            std::pair<int,std::pair<int, int>> newInfo = this->merge(info,vpSetInfo[setIdx]);
+                            if (newInfo.first == true){
+                                vpSetInfo[i] = {-1, -1, -1};
+                                vpSetInfo[setIdx][1] = newInfo.second.first;
+                                vpSetInfo[setIdx][2] = newInfo.second.second;
+                                // cout<<"new start: "<<vpSetInfo[setIdx][1]<<", new end: "<<vpSetInfo[setIdx][2]<<endl;
+                            }
+                        }
+                    }
+                }   
+            }
+        }
+        
+        // delete
+        std::vector<std::array<int, 3>> vpSetInfoFiltered;
+        for(int i=0;i<int(vpSetInfo.size());i++){
+            std::array<int, 3> info = vpSetInfo[i];
+            if (info[0]>=0) {
+                vpSetInfoFiltered.push_back(info);
+            }
+        }
+        // swap
+        for (int i=1;i<int(vpSetInfoFiltered.size());i++){
+            std::array<int, 3> info1 = vpSetInfoFiltered[i];
+            std::array<int, 3> info2 = vpSetInfoFiltered[i-1];
+            double totalDist = this->getDistance(info1[0], info1[2], info1[0], info1[1]);
+            double currDist = this->getDistance(info1[0], info1[1], info2[0], info2[2]);
+            double swapDist = this->getDistance(info1[0], info1[2], info2[0], info2[2]);
+            double threshold = 3.0;
+            if (totalDist<threshold and currDist>swapDist){
+                // cout<<"num segment: "<<i<<"swap"<<endl;
+                vpSetInfoFiltered[i][1] = info1[2];
+                vpSetInfoFiltered[i][2] = info1[1];
+            }
+        }
+
+        // reassign vp
+        std::vector<std::vector<ViewPoint>> vpSetArranged;
+        for (int i=0;i<int(vpSetInfoFiltered.size());i++){
+            std::array<int, 3> info = vpSetInfoFiltered[i];
+            std::vector<ViewPoint> segArranged;
+            // cout<<"segIDX: "<<info[0]<<" start: "<<info[1]<<"end: "<<info[2]<<endl; 
+            // cout<<"start: "<<this->vpCluster_[info[0]][info[1]].pose<<endl;
+            // cout<<"end: "<<this->vpCluster_[info[0]][info[2]].pose<<endl;
+            if (info[1] > info[2]){
+                for (int j = info[1];j>=info[2];j--){
+                    segArranged.push_back(this->vpCluster_[info[0]][j]);
+                }
+            }
+            else{
+                for (int j = info[1];j<=info[2];j++){
+                    segArranged.push_back(this->vpCluster_[info[0]][j]);
+                }
+            }
+            vpSetArranged.push_back(segArranged);
+        }
+        
         return vpSetArranged;
     }
+    
+    // helper function: get segIdx
+    std::pair<int, int> vpPlanner::getSegIdx(const int &targetIdx){
+        // find segment
+        int idx = -1;
+        int currSeg = -1;
+        for (int i=0;i<int(this->vpCluster_.size());i++){
+            if (idx<targetIdx and idx+int(this->vpCluster_[i].size())>=targetIdx){
+                currSeg = i;
+                break;
+            }
+            idx += int(this->vpCluster_[i].size());
+        }
+        std::pair<int, int> segIdx;
+        segIdx.first = currSeg;
+        segIdx.second = targetIdx-idx-1;
+        return segIdx;
+    }
+
+    // helper function: check continuity
+    std::pair<bool, std::pair<int, int>> vpPlanner::merge(const std::array<int, 3>& original, const std::array<int, 3>& target) {
+        int orig_start = std::min(original[1], original[2]);
+        int orig_end = std::max(original[1], original[2]);
+        int target_start = std::min(target[1], target[2]);
+        int target_end = std::max(target[1], target[2]);
+    
+        // Check for overlap first — merge immediately
+        if (orig_end >= target_start && target_end >= orig_start) {
+            int merged_start = std::min(orig_start, target_start);
+            int merged_end = std::max(orig_end, target_end);
+    
+            if (target[1] > target[2]) {
+                return {true, {merged_end, merged_start}};
+            } else {
+                return {true, {merged_start, merged_end}};
+            }
+        }
+    
+        // Now check for continuity (edge-to-edge touch)
+        if (orig_end + 1 == target_start || target_end + 1 == orig_start) {
+            // Determine connecting endpoints
+            int p1 = (orig_end + 1 == target_start) ? orig_end : orig_start;
+            int p2 = (orig_end + 1 == target_start) ? target_start : target_end;
+            
+            int SegIdx = original[0];
+            // --- INSERT YOUR DISTANCE CALCULATION HERE ---
+            double distance = this->getDistance(SegIdx, p1, SegIdx, p2); // placeholder
+    
+            double threshold = 1.1; // adjust as needed
+            if (distance > threshold) {
+                return {false, {0, 0}};
+            }
+    
+            int merged_start = std::min(orig_start, target_start);
+            int merged_end = std::max(orig_end, target_end);
+    
+            if (target[1] > target[2]) {
+                return {true, {merged_end, merged_start}};
+            } else {
+                return {true, {merged_start, merged_end}};
+            }
+        }
+    
+        // Not overlapping or continuous
+        return {false, {0, 0}};
+    }
+
+    double vpPlanner::getDistance(const int &Seg1Idx, const int & p1Idx, const int &Seg2Idx, const int & p2Idx){
+        ViewPoint vp1 = this->vpCluster_[Seg1Idx][p1Idx];
+        ViewPoint vp2 = this->vpCluster_[Seg2Idx][p2Idx];
+        double dist = (vp1.pose-vp2.pose).norm();
+        return dist;
+    }
+    
 
     void vpPlanner::visCB(const ros::TimerEvent&){
         this->publishMap();
         this->publishSeg();
-        this->publishViewPoints();
+        this->publishViewPoints(this->vpSetRaw_);
         this->publishBlockedPoint();
     }
 
@@ -733,8 +825,8 @@ namespace globalPlanner{
         }
     }
 
-    void vpPlanner::publishViewPoints() {
-        if (!this->vpSet_.empty()) {
+    void vpPlanner::publishViewPoints(const std::vector<std::vector<ViewPoint>> &vpSet) {
+        if (!vpSet.empty()) {
             visualization_msgs::Marker point;
             visualization_msgs::Marker text;
             visualization_msgs::MarkerArray points;
@@ -768,16 +860,16 @@ namespace globalPlanner{
 
             int id = 0; // Unique marker ID
             int vpIdx = 0;
-            for (size_t i = 0; i < this->vpSet_.size(); ++i) {
-                for (size_t j = 0; j < this->vpSet_[i].size(); ++j) {
+            for (size_t i = 0; i < vpSet.size(); ++i) {
+                for (size_t j = 0; j < vpSet[i].size(); ++j) {
                     // Re-initialize and update position for each point
-                    point.pose.position.x = this->vpSet_[i][j].pose(0);
-                    point.pose.position.y = this->vpSet_[i][j].pose(1);
-                    point.pose.position.z = this->vpSet_[i][j].pose(2);
+                    point.pose.position.x = vpSet[i][j].pose(0);
+                    point.pose.position.y = vpSet[i][j].pose(1);
+                    point.pose.position.z = vpSet[i][j].pose(2);
                     
-                    text.pose.position.x = this->vpSet_[i][j].pose(0);
-                    text.pose.position.y = this->vpSet_[i][j].pose(1);
-                    text.pose.position.z = this->vpSet_[i][j].pose(2)+0.5;
+                    text.pose.position.x = vpSet[i][j].pose(0);
+                    text.pose.position.y = vpSet[i][j].pose(1);
+                    text.pose.position.z = vpSet[i][j].pose(2)+0.5;
                     
                     text.text = std::to_string(vpIdx);
                     point.id = id++; // Assign unique ID for each marker
