@@ -67,12 +67,12 @@ namespace globalPlanner{
 		}
 
         // map resolution
-        if (not this->nh_.getParam(this->ns_ + "/map_resolution", this->resolution_)){
-			this->resolution_ = 0.1;
+        if (not this->nh_.getParam(this->ns_ + "/map_resolution", this->mapRes_)){
+			this->mapRes_ = 0.1;
 			cout << this->hint_ << ": No map resolution param found. Use 0.1 m" << endl;
 		}
 		else{
-			cout << this->hint_ << ": the map resolution param is found: " << this->resolution_ << endl;
+			cout << this->hint_ << ": the map resolution param is found: " << this->mapRes_ << endl;
 		}
 
         // segmentation param
@@ -115,9 +115,40 @@ namespace globalPlanner{
         else{
             cout<< this->hint_ <<": the merge threshold param is found: " << this->mergeThres_ << endl;
         }
+
+        if (not this->nh_.getParam(this->ns_ + "/manual_vertice", this->manualVert_)){
+            this->manualVert_ = false;
+            cout<< this->hint_ << ": No manual vertice param found. Use 0. "<<endl;
+        }
+        else{
+            cout<< this->hint_ <<": the manual vertice param is found: " << this->manualVert_ << endl;
+        }
+
+        std::vector<double> vertVecTemp;
+		if (not this->nh_.getParam(this->ns_ + "/vertice", vertVecTemp)){
+			// this->predefinedGoal_.poses.clear();
+            this->manualVert_ = false;
+			cout << "[AutoFlight]: No use vertice param found." << endl;
+		} 
+		else{
+			int numVert = int(vertVecTemp.size())/3;
+			std::vector<Eigen::Vector3d> polyTemp;
+            this->poly_.clear();
+			for (int i=0; i<numVert; ++i){
+				// geometry_msgs::PoseStamped goal;
+                Eigen::Vector3d vert;
+				vert(0) = vertVecTemp[i*3+0];
+				vert(1) = vertVecTemp[i*3+1];
+				vert(2) = vertVecTemp[i*3+2];
+				polyTemp.push_back(vert);
+				cout << "[AutoFlight]: Vertice is set to: " << vert(0) <<", "<< vert(1) <<", "<< vert(2) << "." << endl;
+			}
+			this->poly_ = polyTemp;
+		}
     }
 
     void vpPlanner::registerPub(){
+        this->polygonVisPub_ = this->nh_.advertise<visualization_msgs::MarkerArray>(this->ns_ + "/polygon", 10);
         this->mapVisPub_ = this->nh_.advertise<sensor_msgs::PointCloud2>(this->ns_ + "/ref_map", 10);
         this->pointVisPub_ = this->nh_.advertise<visualization_msgs::MarkerArray>(this->ns_ + "/view_points", 10);
         this->segMapVisPub_ = this->nh_.advertise<visualization_msgs::MarkerArray>(this->ns_ + "/seg_map", 10);
@@ -127,6 +158,7 @@ namespace globalPlanner{
 
     void vpPlanner::registerCallback(){
         this->visTimer_ = this->nh_.createTimer(ros::Duration(0.1), &vpPlanner::visCB, this);
+        // this->replanTimer_ = this->nh_.createTimer(ros::Duration(0.1), &vpPlanner::replanCB, this);
     }
 
     void vpPlanner::setMap(const std::shared_ptr<mapManager::occMap>& map){
@@ -167,28 +199,46 @@ namespace globalPlanner{
 
         pcl::PointXYZ minPoint, maxPoint;
         pcl::getMinMax3D(this->refCloud_, minPoint, maxPoint);
-        this->mapMin_ = {minPoint.x, minPoint.y, minPoint.z};
-        this->mapMax_ = {maxPoint.x, maxPoint.y, maxPoint.z};
+        this->mapSizeMin_ = {std::floor(minPoint.x/this->mapRes_)*this->mapRes_,
+                             std::floor(minPoint.y/this->mapRes_)*this->mapRes_, 
+                             std::floor(minPoint.z/this->mapRes_)*this->mapRes_};
+        this->mapSizeMax_ = {std::ceil(maxPoint.x/this->mapRes_)*this->mapRes_,
+                             std::ceil(maxPoint.y/this->mapRes_)*this->mapRes_, 
+                             std::ceil(maxPoint.z/this->mapRes_)*this->mapRes_};
+        Eigen::Vector3d mapSizeVec = this->mapSizeMax_ - this->mapSizeMin_;
+        // min max for voxel
+        this->mapVoxelMin_(0) = 0; this->mapVoxelMax_(0) = ceil(mapSizeVec[0]/this->mapRes_);
+        this->mapVoxelMin_(1) = 0; this->mapVoxelMax_(1) = ceil(mapSizeVec[1]/this->mapRes_);
+        this->mapVoxelMin_(2) = 0; this->mapVoxelMax_(2) = ceil(mapSizeVec[2]/this->mapRes_);
         this->genOccMap();
 	}
 
     void vpPlanner::genOccMap(){
-        // Define grid dimensions (based on point cloud bounds and resolution)
-        this->occupancy_.width = ceil((this->mapMax_(0) - this->mapMin_(0)) / this->resolution_) + 1;
-        this->occupancy_.height = ceil((this->mapMax_(1) - this->mapMin_(1)) / this->resolution_) + 1;
-        this->occupancy_.depth = ceil((this->mapMax_(2) - this->mapMin_(2)) / this->resolution_) + 1;
-
-        this->occupancy_.occ.resize(this->occupancy_.width * this->occupancy_.height * this->occupancy_.depth, false); 
-        this->occupancy_.reward.resize(this->occupancy_.width * this->occupancy_.height * this->occupancy_.depth, 0.0); 
+        int reservedSize = this->mapVoxelMax_(0) * this->mapVoxelMax_(1) * this->mapVoxelMax_(2);
+        cout<<"map size in voxel: "<<this->mapVoxelMax_(0)<<" x "<<this->mapVoxelMax_(1)<<" x "<<this->mapVoxelMax_(2)<<endl;
+        cout<<"reserved size: "<<reservedSize<<endl;
+        this->occupancy_.resize(reservedSize, false); 
+        this->reward_.resize(reservedSize, 0.0); 
         
         // Fill the occupancy grid with the point cloud data
-        for (const auto& point : this->refCloud_.points) {
-            int idx = this->getIdx(point.x,point.y,point.z);
-            this->occupancy_.occ[idx] = true;
-            if (this->isSurfaceVoxel(point.x,point.y,point.z)){
-                this->occupancy_.reward[idx] = 0.5;
-            }
+        for (int i=0; i < int(this->refCloud_.points.size()); ++i) {
+            pcl::PointXYZ point = this->refCloud_.points[i];
+            Eigen::Vector3d pointVec(point.x, point.y, point.z);
+            int idx = this->posToAddress(pointVec);
+            this->occupancy_[idx] = true;
         }
+
+        for (int x=this->mapVoxelMin_(0); x<this->mapVoxelMax_(0); ++x){
+			for (int y=this->mapVoxelMin_(1); y<this->mapVoxelMax_(1); ++y){
+				for (int z=this->mapVoxelMin_(2); z<this->mapVoxelMax_(2); ++z){
+                    Eigen::Vector3i pointIdx (x, y, z);
+					// if (this->isSurfaceVoxel(pointIdx)){
+						int add = this->indexToAddress(pointIdx);
+                        this->reward_[add] = 0.5;
+					// }
+				}
+			}
+		}
     }
 
     void vpPlanner::segMap(){
@@ -333,7 +383,7 @@ namespace globalPlanner{
                 if (std::abs(angle-M_PI/2)<=0.1){
                     Eigen::Vector3d angleVec = centroid-mid;
                     double viewAngle = atan2(angleVec(1),angleVec(0));
-                    cout<<"origin view angle: "<<viewAngle<<endl;
+                    // cout<<"origin view angle: "<<viewAngle<<endl;
 
                     for (double j=0.1;j<height;j+=this->stepZ_){
                         Eigen::Vector3d p = start;
@@ -342,12 +392,24 @@ namespace globalPlanner{
                         for(double dist=0.1;dist<direction.norm();dist+=this->step_){                                                    
                             Eigen::Vector3d point = p;
                             point = point + dist*direction/direction.norm();
-                            if (this->isInMap(point(0), point(1), point(2))){
-                                if (not this->vpHasCollision(point)){   
-                                    ViewPoint vp;
-                                    vp.pose = point;
-                                    vp.yaw = viewAngle;
-                                    vps.push_back(vp);
+                            if (this->manualVert_){
+                                if (this->isInMap(point) and this->isInPolygon(point)==1){
+                                    if (not this->vpHasCollision(point)){   
+                                        ViewPoint vp;
+                                        vp.pose = point;
+                                        vp.yaw = viewAngle;
+                                        vps.push_back(vp);
+                                    }
+                                }
+                            }
+                            else{
+                                if (this->isInMap(point)){
+                                    if (not this->vpHasCollision(point)){   
+                                        ViewPoint vp;
+                                        vp.pose = point;
+                                        vp.yaw = viewAngle;
+                                        vps.push_back(vp);
+                                    }
                                 }
                             }
                         }
@@ -374,6 +436,7 @@ namespace globalPlanner{
 			this->vpIdx_.push_back(idx1);
 			this->vpIdx_.push_back(idx2);
 		}
+        this->inaccessibleVps_.resize(this->vpSet_.size());
 		// // Init First Goal
 		// this->goal_.pose.position.x = 0.0;
 		// this->goal_.pose.position.y = 0.0;
@@ -527,7 +590,7 @@ namespace globalPlanner{
         for (int threshold=1;threshold<=this->mergeThres_;threshold++){
             for (int i=0;i<int(vpSetInfo.size());i++){
                 std::array<int, 3> info = vpSetInfo[i];
-                if (info[0]>0){
+                if (info[0]>=0){
                     if (std::abs(info[1]-info[2])<threshold){
                         // find closest
                         int setIdx = -1;
@@ -540,15 +603,15 @@ namespace globalPlanner{
                                 }
                             }
                         }
-                        // cout<<"original: "<<"seg: "<<info[0]<<", start"<<info[1]<<", end: "<<info[2]<<endl;
+                        cout<<"original: "<<"seg: "<<info[0]<<", start"<<info[1]<<", end: "<<info[2]<<endl;
                         if (setIdx >= 0){
-                            // cout<<"target: "<<"seg: "<<vpSetInfo[setIdx][0]<<", start"<<vpSetInfo[setIdx][1]<<", end: "<<vpSetInfo[setIdx][2]<<endl;
+                            cout<<"target: "<<"seg: "<<vpSetInfo[setIdx][0]<<", start"<<vpSetInfo[setIdx][1]<<", end: "<<vpSetInfo[setIdx][2]<<endl;
                             std::pair<int,std::pair<int, int>> newInfo = this->merge(info,vpSetInfo[setIdx]);
                             if (newInfo.first == true){
                                 vpSetInfo[i] = {-1, -1, -1};
                                 vpSetInfo[setIdx][1] = newInfo.second.first;
                                 vpSetInfo[setIdx][2] = newInfo.second.second;
-                                // cout<<"new start: "<<vpSetInfo[setIdx][1]<<", new end: "<<vpSetInfo[setIdx][2]<<endl;
+                                cout<<"new start: "<<vpSetInfo[setIdx][1]<<", new end: "<<vpSetInfo[setIdx][2]<<endl;
                             }
                         }
                     }
@@ -584,7 +647,7 @@ namespace globalPlanner{
         for (int i=0;i<int(vpSetInfoFiltered.size());i++){
             std::array<int, 3> info = vpSetInfoFiltered[i];
             std::vector<ViewPoint> segArranged;
-            // cout<<"segIDX: "<<info[0]<<" start: "<<info[1]<<"end: "<<info[2]<<endl; 
+            cout<<"segIDX: "<<info[0]<<" start: "<<info[1]<<"end: "<<info[2]<<endl; 
             // cout<<"start: "<<this->vpCluster_[info[0]][info[1]].pose<<endl;
             // cout<<"end: "<<this->vpCluster_[info[0]][info[2]].pose<<endl;
             if (info[1] > info[2]){
@@ -622,16 +685,32 @@ namespace globalPlanner{
         }
     
         // Now check for continuity (edge-to-edge touch)
-        if (orig_end + 1 == target_start || target_end + 1 == orig_start) {
+        int left_end, right_start;
+        bool orig_is_left;
+        
+        if (orig_end < target_start) {
+            left_end = orig_end;
+            right_start = target_start;
+            orig_is_left = true;
+        } else {
+            left_end = target_end;
+            right_start = orig_start;
+            orig_is_left = false;
+        }
+
+        int index_gap = right_start - left_end; 
+        int MAX_INDEX_GAP = 5; 
+
+        if (index_gap <= MAX_INDEX_GAP) {
             // Determine connecting endpoints
-            int p1 = (orig_end + 1 == target_start) ? orig_end : orig_start;
-            int p2 = (orig_end + 1 == target_start) ? target_start : target_end;
-            
+            int p1 = left_end;
+            int p2 = right_start;
+
             int SegIdx = original[0];
             // --- INSERT YOUR DISTANCE CALCULATION HERE ---
             double distance = this->getDistance(SegIdx, p1, SegIdx, p2); // placeholder
     
-            double threshold = 1.1; // adjust as needed
+            double threshold = INFINITY; // adjust as needed
             if (distance > threshold) {
                 return {false, {0, 0}};
             }
@@ -648,21 +727,118 @@ namespace globalPlanner{
     
         // Not overlapping or continuous
         return {false, {0, 0}};
-    }    
+    }   
+
+    void vpPlanner::replanCB(const ros::TimerEvent&){
+        // TODO: 1. check collision
+        std::vector<Eigen::Vector2i> inaccessibleIdx;
+        this->getInaccessibleView(inaccessibleIdx);
+
+        // 2. generate new viewpoint
+        // 3. generate new input path
+        // 4. modify input path wrt current pose
+    }
 
     void vpPlanner::visCB(const ros::TimerEvent&){
         this->publishMap();
         this->publishSeg();
         this->publishViewPoints(this->vpSetRaw_);
         this->publishBlockedPoint();
+        if (this->manualVert_){
+            this->publishPolygon();
+        }
+    }
+
+    void vpPlanner::publishPolygon(){
+        visualization_msgs::MarkerArray ma;
+        int id = 0;
+        visualization_msgs::Marker m_vertices;
+        m_vertices.header.frame_id = "map";
+        m_vertices.header.stamp = ros::Time::now();
+        m_vertices.ns = "polygon_vertices";
+        m_vertices.id = id++;
+        m_vertices.type = visualization_msgs::Marker::SPHERE_LIST;
+        m_vertices.action = visualization_msgs::Marker::ADD;
+        m_vertices.scale.x = 0.1; // sphere diameter
+        m_vertices.scale.y = 0.1;
+        m_vertices.scale.z = 0.1;
+        m_vertices.color.r = 1.0f;
+        m_vertices.color.g = 0.0f;
+        m_vertices.color.b = 0.0f;
+        m_vertices.color.a = 1.0f;
+        for (const Eigen::Vector3d& v : this->poly_) {
+            geometry_msgs::Point p;
+            p.x = v(0); p.y = v(1); p.z = v(2);
+            m_vertices.points.push_back(p);
+        }
+        ma.markers.push_back(m_vertices);
+
+        // === Boundary as line strip ===
+        visualization_msgs::Marker m_edges;
+        m_edges.header.frame_id = "map";
+        m_edges.header.stamp = ros::Time::now();
+        m_edges.ns = "polygon_boundary";
+        m_edges.id = id++;
+        m_edges.type = visualization_msgs::Marker::LINE_STRIP;
+        m_edges.action = visualization_msgs::Marker::ADD;
+        m_edges.scale.x = 0.05; // line width
+        m_edges.color.r = 0.0f;
+        m_edges.color.g = 0.0f;
+        m_edges.color.b = 1.0f;
+        m_edges.color.a = 1.0f;
+        for (const Eigen::Vector3d& v : this->poly_) {
+            geometry_msgs::Point p;
+            p.x = v(0); p.y = v(1); p.z = v(2);
+            m_edges.points.push_back(p);
+        }
+        // close polygon by repeating first vertex
+        geometry_msgs::Point p0;
+        p0.x = this->poly_.front()(0);
+        p0.y = this->poly_.front()(1);
+        p0.z = this->poly_.front()(2);
+        m_edges.points.push_back(p0);
+
+        ma.markers.push_back(m_edges);
+
+        polygonVisPub_.publish(ma);
     }
 
     void vpPlanner::publishMap(){
-        sensor_msgs::PointCloud2 cloudMsg;
-        pcl::toROSMsg(this->refCloud_, cloudMsg);
-        cloudMsg.header.frame_id = "map";
-        cloudMsg.header.stamp = ros::Time::now();
-        this->mapVisPub_.publish(cloudMsg);
+        // sensor_msgs::PointCloud2 cloudMsg;
+        // pcl::toROSMsg(this->refCloud_, cloudMsg);
+        // cloudMsg.header.frame_id = "map";
+        // cloudMsg.header.stamp = ros::Time::now();
+
+        pcl::PointXYZ pt;
+		pcl::PointCloud<pcl::PointXYZ> cloud;
+
+
+		for (int x=this->mapVoxelMin_(0); x<this->mapVoxelMax_(0); ++x){
+			for (int y=this->mapVoxelMin_(1); y<this->mapVoxelMax_(1); ++y){
+				for (int z=this->mapVoxelMin_(2); z<this->mapVoxelMax_(2); ++z){
+					Eigen::Vector3i pointIdx (x, y, z);
+
+					// if (this->occupancy_[this->indexToAddress(pointIdx)] > this->pMinLog_){
+					if (this->isOccupied(pointIdx)){
+						Eigen::Vector3d point;
+						this->indexToPos(pointIdx, point);
+							pt.x = point(0);
+							pt.y = point(1);
+							pt.z = point(2);
+							cloud.push_back(pt);
+					}
+				}
+			}
+		}
+
+		cloud.width = cloud.points.size();
+		cloud.height = 1;
+		cloud.is_dense = true;
+		cloud.header.frame_id = "map";
+
+		sensor_msgs::PointCloud2 cloudMsg;
+		pcl::toROSMsg(cloud, cloudMsg);
+		this->mapVisPub_.publish(cloudMsg);
     }
 
     void vpPlanner::publishBlockedPoint(){
@@ -685,16 +861,24 @@ namespace globalPlanner{
 		points.color.a = 1.0f; // Fully opaque
 
 		// Add the hitpoints to the marker
-		for (int i=0;i<int(this->refCloud_.points.size());i++){
-				geometry_msgs::Point p;
-				p.x = this->refCloud_.points[i].x;
-				p.y = this->refCloud_.points[i].y;
-				p.z = this->refCloud_.points[i].z;
-                if (this->isSurfaceVoxel(p.x,p.y,p.z)){
-                    points.points.push_back(p);
+		for (int x=this->mapVoxelMin_(0); x<this->mapVoxelMax_(0); ++x){
+			for (int y=this->mapVoxelMin_(1); y<this->mapVoxelMax_(1); ++y){
+				for (int z=this->mapVoxelMin_(2); z<this->mapVoxelMax_(2); ++z){
+                    Eigen::Vector3i pointIdx (x, y, z);
+                    int add = this->indexToAddress(pointIdx);
+                    if (this->reward_[add] == 1.0){
+                        geometry_msgs::Point pt;
+                        Eigen::Vector3d point;
+                        this->indexToPos(pointIdx, point);
+                        pt.x = point(0);
+                        pt.y = point(1);
+                        pt.z = point(2);
+                        points.points.push_back(pt);
+                    }
                 }
+			}
 		}
-        // cout<<this->refCloud_.points.size()<<" points, "<<points.points.size()<<" surface"<<endl;
+        // cout<<this->refCloud_.points.size()<<" points, "<<points.points.size()<<" not surface"<<endl;
 		this->blockedVisPub_.publish(points);
     }
 
@@ -847,6 +1031,10 @@ namespace globalPlanner{
     }
 
     // helper function
+    void vpPlanner::setVertice(const std::vector<Eigen::Vector3d> & inputVert){
+        this->poly_ = inputVert;
+    }
+
     std::pair<int, int> vpPlanner::getSegIdx(const int &targetIdx){
         // find segment
         int idx = -1;
@@ -880,13 +1068,56 @@ namespace globalPlanner{
                     p(0) = viewpoint(0)+i;
                     p(1) = viewpoint(1)+j;
                     p(2) = viewpoint(2);
-                    if (this->isInMap(p(0), p(1), p(2)) and this->isOccupied(p(0), p(1), p(2))){
+                    if (this->isInMap(p) and this->isOccupied(p)){
                         return true;
                     }
-                    else if (not this->isInMap(p(0), p(1), p(2))){
+                    else if (not this->isInMap(p)){
                         return true;
                     }
                 // }
+            }
+        }
+        return false;
+    }
+
+    bool vpPlanner::vpHasOcclusionInViewCone(
+        const ViewPoint& vp,
+        double max_range,      // x 米，例如 1.0 / 1.5 / offset_
+        double yaw_half_fov,   // 35deg
+        double pitch_half_fov, // 21deg
+        double yaw_step,       // 0.1 rad
+        double pitch_step,     // 0.1 rad
+        double ray_step        // 0.1 or 0.5 * map resolution
+    ) 
+    {
+
+        const double minYaw   = vp.yaw - yaw_half_fov;
+        const double maxYaw   = vp.yaw + yaw_half_fov;
+        const double minPitch = -pitch_half_fov;
+        const double maxPitch = +pitch_half_fov;
+
+        for (double yaw = minYaw; yaw <= maxYaw; yaw += yaw_step) {
+            for (double pitch = minPitch; pitch <= maxPitch; pitch += pitch_step) {
+
+                // yaw + pitch -> unit direction
+                const double c = std::cos(pitch);
+                Eigen::Vector3d dir(std::cos(yaw) * c,
+                                    std::sin(yaw) * c,
+                                    std::sin(pitch));
+                dir.normalize();
+
+                // raycast
+                for (double t = 0.0; t <= max_range; t += ray_step) {
+                    const Eigen::Vector3d p = vp.pose + dir * t;
+
+                    if (!this->isInMap(p)) {
+                        break;
+                    }
+
+                    if (this->mapRT_->isInMap(p) && this->mapRT_->isOccupied(p)) {
+                        return true;
+                    }
+                }
             }
         }
         return false;
@@ -901,10 +1132,7 @@ namespace globalPlanner{
                     p(0) = viewpoint(0)+i;
                     p(1) = viewpoint(1)+j;
                     p(2) = viewpoint(2);
-                    if (this->mapRT_->isOccupied(p)){
-                        return true;
-                    }
-                    else{
+                    if (this->mapRT_->isInflatedOccupied(p)){
                         return true;
                     }
                 // }
@@ -932,16 +1160,8 @@ namespace globalPlanner{
     bool vpPlanner::getNewGoal(geometry_msgs::PoseStamped &goal, bool &needGlobalPlan, bool &noYawTurning, double &yaw){
         Eigen::Vector3d vp;
         this->goalIdx_++;
-            if (this->goalIdx_ >= int(this->vpIdx_.size()))
-            {
-                goal.pose.position.x = 0;
-                goal.pose.position.y = 0;
-                goal.pose.position.z = 1.0;
-                noYawTurning = false;
-                needGlobalPlan = true;
-                return true;
-            }
-            
+        
+        if (this->goalIdx_ < int(this->vpIdx_.size())){ // next segment        
             int segIdx = this->vpIdx_[this->goalIdx_](0);
             int vpIdx = this->vpIdx_[this->goalIdx_](1);
             vp = this->vpSet_[segIdx][vpIdx].pose;
@@ -954,84 +1174,122 @@ namespace globalPlanner{
             if (this->goalIdx_%2){// facing view angle
                 needGlobalPlan = false;
                 noYawTurning = true;
-                double currentYaw;
-                currentYaw = this->vpSet_[segIdx][vpIdx].yaw;
-                yaw = currentYaw;
-                cout<<"output yaw: "<<yaw<<endl;
+                // double currentYaw;
+                // currentYaw = this->vpSet_[segIdx][vpIdx].yaw;
+                // yaw = currentYaw;
+                // cout<<"output yaw: "<<yaw<<endl;
             }
             else{// facing next goal when navigating from one segment to another
                 needGlobalPlan = true;
                 noYawTurning = false;
             }
+
+            yaw = this->vpSet_[segIdx][vpIdx].yaw;
             
             return true;
+        }
+        return false;
     }
 
-    // TODO: check viewpoint collision
-    bool vpPlanner::getNewReplanGoal(geometry_msgs::PoseStamped &goal, bool &needGlobalPlan, bool &noYawTurning, double &yaw){
-
-        cout<<"looking for new goal"<<endl;
-        Eigen::Vector3d vp;
-        int segIdx = this->vpIdx_[this->goalIdx_](0);
-        int vpIdx = this->vpIdx_[this->goalIdx_](1);
-        int newVPIdx = -1;
-        vp = this->vpSet_[segIdx][vpIdx].pose;
-        bool replanSuccess = false;
+    bool vpPlanner::getInputTraj(nav_msgs::Path &inputPath){
         if (this->goalIdx_%2){
-            int lastGoalIdx = this->goalIdx_-1;
-            int lastvpIdx = this->vpIdx_[lastGoalIdx](1);
-            for(int i=vpIdx;i>lastvpIdx; i--){
-                vp = this->vpSet_[segIdx][i].pose;
-                if (not this->vpHasCollisionRT(vp)){
-                    replanSuccess = true;
-                    newVPIdx = i;
-                    break;
-                }
+            int segIdx = this->vpIdx_[this->goalIdx_](0);
+            int endIdx = this->vpIdx_[this->goalIdx_](1);
+            int startIdx = this->vpIdx_[this->goalIdx_-1](1);
+            for (int i=startIdx;i<=endIdx;i++){
+                geometry_msgs::PoseStamped viewpoint;
+                viewpoint.pose.position.x = this->vpSet_[segIdx][i].pose(0);
+                viewpoint.pose.position.y = this->vpSet_[segIdx][i].pose(1);
+                viewpoint.pose.position.z = this->vpSet_[segIdx][i].pose(2);
+                inputPath.poses.push_back(viewpoint);
             }
-            // if not replanSuccess, go to next segment
-            if (not replanSuccess){
-                // this->goalIdx_+=1;
-                return false;
-            }
+            return true;
         }
         else{
-            int nextGoalIdx = this->goalIdx_+1;
-            int nextvpIdx = this->vpIdx_[nextGoalIdx](1);
-            for (int i=vpIdx;i < nextvpIdx; i++){
-                vp = this->vpSet_[segIdx][i].pose;
-                if (not this->vpHasCollisionRT(vp)){
-                    replanSuccess = true;
-                    newVPIdx = i;
-                    break;
+            return false;
+        }
+    }
+
+    bool vpPlanner::getNewReplanGoal(geometry_msgs::PoseStamped &goal, bool &needGlobalPlan, bool &noYawTurning, double &yaw){
+        if (this->goalIdx_ < int(this->vpIdx_.size())){
+            cout<<"looking for new goal"<<endl;
+            Eigen::Vector3d vp;
+            int segIdx = this->vpIdx_[this->goalIdx_](0);
+            int vpIdx = this->vpIdx_[this->goalIdx_](1);
+            cout<<"old idx: "<<segIdx<<","<<vpIdx<<endl;
+            int newVPIdx = -1;
+            vp = this->vpSet_[segIdx][vpIdx].pose;
+            bool replanSuccess = false;
+            if (this->goalIdx_%2){
+                cout<<"plan in current segment"<<endl;
+
+                while (vpIdx > this->vpIdx_[this->goalIdx_-1](1)){
+                    vpIdx--;
+                    Eigen::Vector3d vp;
+                    vp = this->vpSet_[segIdx][vpIdx].pose;
+                    if (this->vpHasCollisionRT(vp)){
+                        continue;
+                    }
+                    else{
+                        replanSuccess = true;
+                        newVPIdx = vpIdx;
+                        break;
+                    }
+
+                }
+                // if not replanSuccess, go to next segment
+                if (not replanSuccess){
+                    // this->goalIdx_+=1;
+                    return false;
                 }
             }
-            // if not replanSuccess, go to next segment
-            if (not replanSuccess){
-                this->goalIdx_+=1;
-                return false;
+            else{
+                cout<<"plan in new segment"<<endl;
+                while (vpIdx < this->vpIdx_[this->goalIdx_+1](1)){
+                    vpIdx++;
+                    Eigen::Vector3d vp;
+                    vp = this->vpSet_[segIdx][vpIdx].pose;
+                    if (this->vpHasCollisionRT(vp)){
+                        continue;
+                    }
+                    else{
+                        replanSuccess = true;
+                        newVPIdx = vpIdx;
+                        break;
+                    }
+
+                }
+                // if not replanSuccess, go to next segment
+                if (not replanSuccess){
+                    this->goalIdx_+=1;
+                    return false;
+                }
             }
-        }
 
-        this->vpIdx_[this->goalIdx_](1) = newVPIdx;
-        vp = this->vpSet_[segIdx][newVPIdx].pose;
-        cout<<"new goal: "<<vp;
-        goal.pose.position.x = vp(0);
-        goal.pose.position.y = vp(1);
-        goal.pose.position.z = vp(2);
+            this->vpIdx_[this->goalIdx_](1) = newVPIdx;
+            vp = this->vpSet_[segIdx][newVPIdx].pose;
+            // cout<<"new goal: "<<vp;
+            cout<<"new idx: "<<segIdx<<","<<newVPIdx<<endl;
+            goal.pose.position.x = vp(0);
+            goal.pose.position.y = vp(1);
+            goal.pose.position.z = vp(2);
 
-        if (this->goalIdx_%2){// facing view angle
-            noYawTurning = true;
-            needGlobalPlan = false;
-            double currentYaw;
-            currentYaw = this->vpSet_[segIdx][vpIdx].yaw;
-            yaw = currentYaw;
+            if (this->goalIdx_%2){// facing view angle
+                noYawTurning = true;
+                needGlobalPlan = false;
+                // double currentYaw;
+                // currentYaw = this->vpSet_[segIdx][newVPIdx].yaw;
+                // yaw = currentYaw;
+            }
+            else{// facing next goal when navigating from one segment to another
+                needGlobalPlan = true;
+                noYawTurning = false;
+            }
+            yaw = this->vpSet_[segIdx][vpIdx].yaw;
+        
+            return true;
         }
-        else{// facing next goal when navigating from one segment to another
-            needGlobalPlan = true;
-            noYawTurning = false;
-        }
-       
-        return true;
+        return false;
     }
 
     void vpPlanner::updateCurrPos(const Eigen::Vector3d &currPos){
@@ -1042,14 +1300,22 @@ namespace globalPlanner{
 		int segIdx = this->vpIdx_[this->goalIdx_](0);
 		for (int i=0;i<int(this->vpSet_[segIdx].size());i++){
 			Eigen::Vector3d vp = this->vpSet_[segIdx][i].pose;
-			if (this->vpHasCollisionRT(vp)){
+			// if (this->vpHasCollisionRT(vp)){
+            if (this->vpHasOcclusionInViewCone(this->vpSet_[segIdx][i],this->offset_-0.5)){
 				Eigen::Vector2i idx{segIdx,i};
 				inaccessibleIdx.push_back(idx);
 			}
+            
 		}
+        this->inaccessibleVps_[segIdx] = inaccessibleIdx;
+        std::vector<Eigen::Vector3d> inaccessibleGrid;
+        if (inaccessibleIdx.size()>0){
+            cout<<"inaccessible viewpoints: "<<inaccessibleIdx.size()<<endl;
+            this->updateInaccessibleView(inaccessibleIdx, inaccessibleGrid);
+        }
 	}
 
-    void vpPlanner::updateInaccessibleView(const std::vector<Eigen::Vector2i> &inaccessibleIdx){
+    void vpPlanner::updateInaccessibleView(const std::vector<Eigen::Vector2i> &inaccessibleIdx, std::vector<Eigen::Vector3d> &inaccessibleGrid){
         for (int i=0; i<int(inaccessibleIdx.size());i++){
             // get blocked viewpoint
             ViewPoint vp = this->vpSet_[inaccessibleIdx[i][0]][inaccessibleIdx[i][1]];
@@ -1063,10 +1329,14 @@ namespace globalPlanner{
                     Eigen::Vector3d dir{cos(j), sin(j), tan(n)};
                     for (double k=0;k<this->offset_+2.0;k+=0.1){
                         Eigen::Vector3d projPoint = vp.pose + dir*k;
-                        if (this->isInMap(projPoint(0), projPoint(1),projPoint(2)) and this->isSurfaceVoxel(projPoint(0), projPoint(1),projPoint(2))){
-                            int pointIdx = this->getIdx(projPoint(0), projPoint(1), projPoint(2));
+                        Eigen::Vector3i projIdx;
+                        this->posToIndex(projPoint, projIdx);
+                        if (this->isInMap(projPoint) and not this->isOccupied(projIdx)){
+                            // TODO: change to "set reward"
+                            int pointIdx = this->posToAddress(projPoint);
                             // TODO: check reward value
-                            this->occupancy_.reward[pointIdx] = 1.0;
+                            this->reward_[pointIdx] = 1.0;
+                            inaccessibleGrid.push_back(projPoint);
                         }  
                     }
                 }   
@@ -1083,10 +1353,6 @@ namespace globalPlanner{
             double r = 0;
             for (int j=0;j<int(hitPoints[i].size());j++){
                 Eigen::Vector3d p = hitPoints[i][j];
-                // if (this->isInMap(p(0), p(1), p(2)) and this->isOccupied(p(0), p(1), p(2))){
-                //     int idx = this->getIdx(p(0), p(1), p(2));
-                //     r += this->occupancy_.reward[idx];
-                // }
                 r += this->getReward(p);
             }          
             reward.push_back(r);
@@ -1094,12 +1360,14 @@ namespace globalPlanner{
         std::vector<std::pair<double, double>> angleReward;
         for (int i=0;i<int(reward.size());i++){
             double ang = i*hres;
+            // cout<<"angle: "<<ang<<", reward: "<<reward[i]<<endl;
             // TODO: Angle threshold
             // if (std::abs(ang-yaw/M_PI*180)<10){
                 double r = 0;
                 double minAngle, maxAngle;
                 minAngle = i*hres - 69/2;
                 maxAngle = i*hres + 69/2;
+                int numAngleCnt = 0;
                 for (double angle = minAngle;angle < maxAngle;angle += hres){
                     int idx = int(angle/hres);
                     if (idx < 0){
@@ -1109,13 +1377,19 @@ namespace globalPlanner{
                         idx = idx - int(reward.size());
                     }
                     r += reward[idx];
+                    numAngleCnt++;
                 }
+                r = r/numAngleCnt;
                 std::pair<double, double> angleR;
                 
                 angleR.second = i*hres/180*M_PI;
                 // weighted score
-                double weight = 10*cos(angleR.second-yaw)+10;
+                double delta = angleR.second - yaw;
+                delta = atan2(sin(delta), cos(delta));  // wrap to [-pi, pi]
+                // cout<<"cal angle: "<<angleR.second<<", delta: "<<delta<<"yaw: "<<yaw<<endl;
+                double weight = (cos(delta)+1.0)/2.0; // [0,1]
                 angleR.first = r*weight;
+                // cout<<"weight: "<<weight<<", weighted reward: "<<angleR.first<<endl;
                 angleReward.push_back(angleR);
             // }
         }
@@ -1133,9 +1407,31 @@ namespace globalPlanner{
             else{
                 viewAngle = maxElement->second;
             }
+            // TODO:keep if neccessary
+            int minrayIdx = int(viewAngle/M_PI*180 - 69/2)/(hres);
+            int maxrayIdx = int(viewAngle/M_PI*180 + 69/2)/(hres);
+            // cout<<"minrayIdx: "<<minrayIdx<<", maxrayIdx: "<<maxrayIdx<<endl;
+            for (int r=minrayIdx;r<=maxrayIdx;r++){
+                int idx = r;
+                if (idx < 0){
+                    idx = int(hitPoints.size())+idx;
+                }
+                else if (idx >= int(hitPoints.size())){
+                    idx = idx - int(hitPoints.size());
+                }
+                std::vector<Eigen::Vector3d> hitPts = hitPoints[idx];
+                for (int i=0;i<int(hitPts.size());i++){
+                    this->setReward(hitPts[i], 0.1);
+                }
+            }
             return viewAngle;
         }
 
+        // int rayIdx = int(yaw/(hres/180*M_PI));
+        // std::vector<Eigen::Vector3d> hitPts = hitPoints[rayIdx];
+        // for (int i=0;i<int(hitPts.size());i++){
+        //     this->setReward(hitPts[i], 0.25);
+        // }
         return yaw;
     }
 
@@ -1149,9 +1445,9 @@ namespace globalPlanner{
 					p(0) = hitPoint(0)+i;
 					p(1) = hitPoint(1)+j;
 					p(2) = hitPoint(2)+k;
-					if (this->isInMap(p(0), p(1), p(2))){
-                        int idx = this->getIdx(p(0), p(1), p(2));
-						reward += this->occupancy_.reward[idx];
+					if (this->isInMap(p)){
+                        int idx = this->posToAddress(p);
+						reward += this->reward_[idx];
 					}
                     // else if (not this->isInMap(p(0), p(1), p(2))){
                     //     return true;
@@ -1160,5 +1456,23 @@ namespace globalPlanner{
 			}
 		}
         return reward;
+    }
+
+    void vpPlanner::setReward(const Eigen::Vector3d &hitPoint, const double &value){
+        Eigen::Vector3d p;
+        double r = 0.2;//radius for goal collision check
+        for (double i=-r; i<=r;i+=0.1){
+            for(double j=-r;j<=r;j+=0.1){
+                for (double k = -r; k<=r; k+=0.1){
+                    p(0) = hitPoint(0)+i;
+                    p(1) = hitPoint(1)+j;
+                    p(2) = hitPoint(2)+k;
+                    if (this->isInMap(p)){
+                        int idx = this->posToAddress(p);
+                        this->reward_[idx] = value;
+                    }
+                }
+            }
+        }
     }
 }
