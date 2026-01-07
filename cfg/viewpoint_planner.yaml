@@ -1,18 +1,43 @@
-inspection_offset: 1.0 #m
-inspection_step: 1.0 #m
-inspection_Z_step: 1.5 #m
+inspection_offset: 2.0 #m
+inspection_step: 0.7 #m
+inspection_Z_step: 2.0 #m
 ground_height: 0.8 #m
 ceiling_height: 2.0 #m
 
 map_resolution: 0.1
 # map_directory: "/home/jhy/catkin_ws/tunnel_map.pcd"
 # map_directory: "/home/jhy/catkin_ws/src/CERLAB-UAV-Autonomy-v2/trajectory_planner/map/square_static_map.pcd"
-map_directory: "/home/jhy/catkin_ws/src/CERLAB-UAV-Autonomy-v2/trajectory_planner/map/floorplan1_static_map.pcd"
-# map_directory: "/home/jhy/catkin_ws/floorplan2.pcd"
+# map_directory: "/home/jhy/catkin_ws/src/CERLAB-UAV-Autonomy-v2/trajectory_planner/map/floorplan1_static_map.pcd"
+map_directory: "/home/jhy/catkin_ws/drone_arena_test.pcd"
+# map_directory: "/home/jhy/catkin_ws/scans_floor2.pcd"
 
 # cluter param
 min_cluster_size: 50
 max_cluster_size: 10000
 curvature_threshold: 1.0
-angle_threshold: 3.0 #degree
-merge_threshold: 2
+angle_threshold: 2.0 #degree
+merge_threshold: 3
+
+manual_vertice: false
+# vertice: [-2.54279,4.20999,1,
+#           -2.49254,-3.92593,1,
+#           13.6602,-3.46207,1,
+#           12.3774,-18.6638,1,
+#           24.8651,-19.0036,1,
+#           24.8226,-17.6817,1,
+#           18.707,-14.6722,1,
+#           21.8989,-7.96888,1,
+#           36.5848,-6.31944,1,
+#           36.4718,-3.89475,1,
+#           15.8797,-3.647,1,
+#           15.2303,4.23078,1]
+
+vertice: [
+          -3.87981,4.14953,1,
+          -3.89171,-3.58295,1,
+          13.1659,-3.5768,1,
+          13.0768,-19.2894,1,
+          18.3778,-19.0037,1,
+          23.9373,-4.22159,1,
+          16.0081,-3.85373,1,
+          15.8628,4.07447,1]
