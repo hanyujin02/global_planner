@@ -1407,23 +1407,23 @@ namespace globalPlanner{
             else{
                 viewAngle = maxElement->second;
             }
-            // TODO:keep if neccessary
-            int minrayIdx = int(viewAngle/M_PI*180 - 69/2)/(hres);
-            int maxrayIdx = int(viewAngle/M_PI*180 + 69/2)/(hres);
-            // cout<<"minrayIdx: "<<minrayIdx<<", maxrayIdx: "<<maxrayIdx<<endl;
-            for (int r=minrayIdx;r<=maxrayIdx;r++){
-                int idx = r;
-                if (idx < 0){
-                    idx = int(hitPoints.size())+idx;
-                }
-                else if (idx >= int(hitPoints.size())){
-                    idx = idx - int(hitPoints.size());
-                }
-                std::vector<Eigen::Vector3d> hitPts = hitPoints[idx];
-                for (int i=0;i<int(hitPts.size());i++){
-                    this->setReward(hitPts[i], 0.1);
-                }
-            }
+            // // TODO:keep if neccessary
+            // int minrayIdx = int(viewAngle/M_PI*180 - 69/2)/(hres);
+            // int maxrayIdx = int(viewAngle/M_PI*180 + 69/2)/(hres);
+            // // cout<<"minrayIdx: "<<minrayIdx<<", maxrayIdx: "<<maxrayIdx<<endl;
+            // for (int r=minrayIdx;r<=maxrayIdx;r++){
+            //     int idx = r;
+            //     if (idx < 0){
+            //         idx = int(hitPoints.size())+idx;
+            //     }
+            //     else if (idx >= int(hitPoints.size())){
+            //         idx = idx - int(hitPoints.size());
+            //     }
+            //     std::vector<Eigen::Vector3d> hitPts = hitPoints[idx];
+            //     for (int i=0;i<int(hitPts.size());i++){
+            //         this->setReward(hitPts[i], 0.1);
+            //     }
+            // }
             return viewAngle;
         }
 
